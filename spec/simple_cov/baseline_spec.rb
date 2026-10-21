@@ -4,6 +4,39 @@ require "helper"
 require "tmpdir"
 
 RSpec.describe SimpleCov::Baseline do
+  describe "loading YAML only for baseline data", mutant: false do
+    it "loads SimpleCov without loading YAML or Psych" do
+      expect_without_yaml("load")
+    end
+
+    it "does not load YAML when the baseline file is absent" do
+      expect_without_yaml("missing")
+    end
+
+    it "preserves argument errors before YAML loads" do
+      expect_without_yaml("invalid_path")
+    end
+
+    it "loads YAML to read an existing baseline" do
+      expect_without_yaml("read")
+    end
+
+    it "preserves configuration errors for invalid YAML after a cold load" do
+      expect_without_yaml("invalid_yaml")
+    end
+
+    it "loads YAML to serialize a generated baseline" do
+      expect_without_yaml("write")
+    end
+
+    def expect_without_yaml(mode)
+      lib = File.expand_path("../../lib", __dir__)
+      fixture = File.expand_path("../fixtures/lazy_yaml.rb", __dir__)
+      stdout, stderr, status = Open3.capture3(child_env, RbConfig.ruby, "-I", lib, fixture, mode)
+      expect(status).to be_success, stdout + stderr
+    end
+  end
+
   describe ".read_if_exists" do
     let(:per_criterion_baseline) do
       read_baseline(<<~YAML)
@@ -22,6 +55,14 @@ RSpec.describe SimpleCov::Baseline do
     it "returns nil when the file does not exist" do
       Dir.mktmpdir do |dir|
         expect(described_class.read_if_exists(File.join(dir, ".simplecov_baseline.yml"))).to be_nil
+      end
+    end
+
+    it "reads an existing baseline without YAML already loaded" do
+      without_yaml do
+        baseline = read_baseline("lib/foo.rb: 41.2\n")
+
+        expect(baseline.floor_for("lib/foo.rb", :line)).to have_attributes(percent: 41.2, missed: nil)
       end
     end
 
@@ -414,6 +455,12 @@ RSpec.describe SimpleCov::Baseline do
       expect(two_file_baseline.to_yaml).to eq(whole_document)
     end
 
+    it "serializes a baseline without YAML already loaded" do
+      without_yaml do
+        expect(two_file_baseline.to_yaml).to eq(whole_document)
+      end
+    end
+
     it "opens with a self-describing header" do
       expect(multi_criterion_baseline.to_yaml).to start_with("# Per-file coverage floors.")
     end
@@ -468,6 +515,31 @@ RSpec.describe SimpleCov::Baseline do
       )
     end
   end
+
+  # Mutant loads YAML before the tests. Reload its Ruby wrapper without
+  # unloading Psych's native extension, and restore the process after each call.
+  # rubocop:disable RSpec/RemoveConst -- require redefines YAML; hide_const would restore it over the new alias.
+  def without_yaml
+    require "yaml"
+    yaml = YAML
+    features = $LOADED_FEATURES.dup
+    loader_version = yaml.const_defined?(:LOADER_VERSION, false) ? yaml.const_get(:LOADER_VERSION) : nil
+
+    begin
+      Object.send(:remove_const, :YAML)
+      yaml.send(:remove_const, :LOADER_VERSION) if loader_version
+      $LOADED_FEATURES.reject! { |feature| File.basename(feature) == "yaml.rb" }
+      yield
+    ensure
+      Object.send(:remove_const, :YAML) if Object.const_defined?(:YAML, false)
+      yaml.send(:remove_const, :LOADER_VERSION) if yaml.const_defined?(:LOADER_VERSION, false)
+      Object.const_set(:YAML, yaml)
+      yaml.const_set(:LOADER_VERSION, loader_version) if loader_version
+      $LOADED_FEATURES.replace(features)
+    end
+  end
+
+  # rubocop:enable RSpec/RemoveConst
 
   def read_baseline(yaml)
     with_baseline_file(yaml) { |path| SimpleCov::Baseline.read_if_exists(path) }

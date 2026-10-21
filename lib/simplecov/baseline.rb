@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "yaml"
-
 module SimpleCov
   # The checked-in per-file coverage floor behind `simplecov ratchet` (#1268):
   # `.rubocop_todo.yml` applied to coverage. Each entry records, per criterion,
@@ -42,10 +40,13 @@ module SimpleCov
     def self.read_if_exists(path)
       return nil unless File.exist?(path)
 
-      new(Parser.call(YAML.safe_load_file(path), path))
-    rescue Psych::Exception => e
-      # Interpolating the exception renders the message Psych objected with.
-      raise ConfigurationError, "baseline file #{path} is not valid YAML: #{e}"
+      require "yaml"
+      begin
+        new(Parser.call(YAML.safe_load_file(path), path))
+      rescue Psych::Exception => e
+        # Interpolating the exception renders the message Psych objected with.
+        raise ConfigurationError, "baseline file #{path} is not valid YAML: #{e}"
+      end
     end
 
     # `current` is a `{project_filename => {criterion => {percent:, missed:}}}`
@@ -106,6 +107,8 @@ module SimpleCov
     # Sorted by path so a ratchet rewrite diffs as the set of floors that
     # actually moved.
     def to_yaml
+      require "yaml"
+
       document = entries.sort.to_h do |file, entry|
         [file, entry.to_h { |criterion, floor| [CRITERIA.key(criterion), dump_floor(floor)] }]
       end
